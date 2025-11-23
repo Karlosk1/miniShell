@@ -40,18 +40,33 @@ SIGINT, mientras los procesos en foreground responderán ante ellas. El comporta
 mandatos al pulsar Ctrl-C deberá ser similar al de bash.
  */
 
-void init_shell();
+//Cada proceso se maneja dentro del main. Las funciones que debemos de implementar a parte son los manejadores de esos procesos
+//Es decir si estamos en el proceso de cd, el proceso llama a una funcion EXTERNA que cambia el directorio y lo devuelve al proceso
+
+/*void init_shell();
 
 void printDir();
 
-int input(char *str);
+int input(char *str);*/
+
+
+typedef int (*command_func)(int argc, char *argv[]); //definimos un tipo que es un puntero a funcion que tenga esos argumentos. Devuelve int
+
+typedef struct { //Esto es basicamente un diccionario en c
+    char *name;         // nombre del comando
+    command_func func;  // puntero a la función que implementa el comando
+} command_entry;
 
 int main(int argc, char* argv[]) {
-    char inputString[MAXCOM], *parsedArgs[MAXLIST];
-    char *parsedArgsPiped[MAXLIST];
-    int flagger = 0;
+    char* inputStdin = malloc(1024);
 
-    init_shell();
+    do { //Mientras que no se haga Ctrl+D no se exitea.
+        inputStdin = fgets(inputStdin,1024,stdin);
+
+
+    }while (1);
+
+    /*init_shell();
 
     while (1) {
         printDir();
@@ -66,12 +81,12 @@ int main(int argc, char* argv[]) {
 
         if (flagger == 2)
             execArgsPiped(parsedArgs, parsedArgsPiped);
-    }
+    }*/
 
     return 0;
 }
 
-void init_shell() {
+/*void init_shell() {
     printf("\033[H\033[J");  // clear screen
     char *username = getenv("USER");
     printf("\n\n\nUSER is: @%s\n", username);
@@ -99,4 +114,5 @@ int input(char *str) {
 
     free(buf);
     return 1;
-}
+}*/
+
