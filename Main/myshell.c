@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include "myshell.h"
 #include <libc.h>
+#include "parser.h"
 
 #define BUFFER_SIZE 1024
 #define MAX_ARGS 64
@@ -59,18 +60,17 @@ typedef struct { //Esto es basicamente un diccionario en c
 } command_entry;
 
 
-int tokenizador(char* linea, char* inputStdin[]);
+int manejador_cd(char* directorio); //esto es la funcion que cambia de directorio pero cd no debne manejarse mediante proceso hijo porque el directorio es parte del contexto del proceso
+
 
 int main(int argc, char* argv[]) {
-    char linea[BUFFER_SIZE];
+    //char linea[BUFFER_SIZE];
     char *inputStdin[MAX_ARGS]; //El argv[] de nuestra shell
-    int numArg=0;
+    tline* args;
     do { //Mientras que no se haga Ctrl+D no se exitea.
-        printf("MiniShell>");
-        fgets(linea,sizeof(linea),stdin);
-        numArg = tokenizador(linea,inputStdin);
-        //En este punto tenemos en inputStdin como si fuera argv y numArg como argc
-
+        printf("msh>");
+        fgets(inputStdin,sizeof(inputStdin),stdin);
+        args = tokenize(inputStdin); //Devuelve el mandato tokenizado
 
 
 
@@ -126,16 +126,21 @@ int input(char *str) {
     return 1;
 }*/
 
-int tokenizador(char* linea,char* inputStdin[]) { //Coge los argvs y divide mandato y argumentos. Esto basicamente es tokenizar nuestra shell, basicamente lo que lee inputStdin
-    int numArg = 0;
-    char *token = strtok(linea, " \t\n"); //Tokeniza lo que nos han pasado por stdin
-
-    while (token != NULL) {
-        inputStdin[numArg++] = token; //En cada hueco de inputStdin, nuestro argv mete los tokens
-        token = strtok(NULL, " \t\n"); //Mueve al siguiente token
+int manejador_cd(char* directorio) {
+    char* dir;
+    if (strcmp(directorio,NULL)) {
+        dir = getenv("HOME");
+        if (dir == NULL) {
+            printf("cd: Variable HOME no definida\n");
+            return 1;
+        }
+    }else {
+        dir = directorio;
     }
-    inputStdin[numArg] = NULL; //Al final metes NULL porque asi lo requiere execvp()
-    return numArg;
+    if (chdir(dir)!=0) {
+        printf("Error: cd");
+        return 1;
+    }
+    return 0;
 }
-
 
