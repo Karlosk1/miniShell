@@ -1,9 +1,13 @@
 #include <stdio.h>
 #include <signal.h>
 #include <string.h>
+#include <unistd.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 #include <sys/types.h>
-#include "myshell.h"
+#include <libc.h>
 #include "parser.h"
+#include "myshell.h"
 
 #define BUFFER_SIZE 1024
 #define MAX_ARGS 64
@@ -83,10 +87,6 @@ command_entry diccionariodeComandos[] = {
     {"fg", (command_func)manejador_fg},
     {NULL, NULL}
 };
-
-typedef tNodeJob* tJobs;
-tJobs listaJobs = NULL;
-int siguienteId = 1;
 
 
 void init_shell() {
