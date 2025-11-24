@@ -1,12 +1,8 @@
 #include <stdio.h>
 #include <signal.h>
 #include <string.h>
-#include <unistd.h>
-#include <readline/readline.h>
-#include <readline/history.h>
 #include <sys/types.h>
 #include "myshell.h"
-#include <libc.h>
 #include "parser.h"
 
 #define BUFFER_SIZE 1024
@@ -88,51 +84,21 @@ command_entry diccionariodeComandos[] = {
     {NULL, NULL}
 };
 
+typedef tNodeJob* tJobs;
+tJobs listaJobs = NULL;
+int siguienteId = 1;
 
 
-
-int main(int argc, char* argv[]) {
-    //char linea[BUFFER_SIZE];
-    char *inputStdin[MAX_ARGS]; //El argv[] de nuestra shell
-    tline* args;
-    do { //Mientras que no se haga Ctrl+D no se exitea.
-        printf("msh>");
-        fgets(inputStdin,sizeof(inputStdin),stdin);
-        args = tokenize(inputStdin); //Devuelve el mandato tokenizado
-
-
-
-    }while (1);
-
-    /*init_shell();
-
-    while (1) {
-        printDir();
-
-        if (input(inputString) != 0)
-            continue;
-
-        flagger = processString(inputString, parsedArgs, parsedArgsPiped);
-
-        if (flagger == 1)
-            execArgs(parsedArgs);
-
-        if (flagger == 2)
-            execArgsPiped(parsedArgs, parsedArgsPiped);
-    }*/
-
-    return 0;
-}
-
-/*void init_shell() {
-    printf("\033[H\033[J");  // clear screen
-    char *username = getenv("USER");
+void init_shell() {
+    clear();
+    char* username = getenv("USER");
     printf("\n\n\nUSER is: @%s\n", username);
     sleep(1);
-    printf("\033[H\033[J");
+    clear();
 }
 
-void printDir() {
+
+void printDir(){
     char currentDirectory[1024];
     getcwd(currentDirectory, sizeof(currentDirectory));
     printf("\nDir: %s", currentDirectory);
@@ -152,7 +118,7 @@ int input(char *str) {
 
     free(buf);
     return 1;
-}*/
+}
 
 int manejador_cd(int argc, char *argv[]) {
     char *dir = (argc > 1) ? argv[1] : getenv("HOME");
@@ -288,4 +254,57 @@ void remove_job(pid_t pgid) {
         }
         free(pAct);
     }
+}
+int processString(char* str, char** parsed, char** parsedpipe){
+    char* strpiped[2];
+    int piped = 0;
+
+    piped = parsePipe(str, strpiped);
+
+    if (piped) {
+        parseSpace(strpiped[0], parsed);
+        parseSpace(strpiped[1], parsedpipe);
+    } else {
+        parseSpace(str, parsed);
+    }
+
+    if (ownCmdHandler(parsed)){
+        return 0;
+    } else {
+        return 1 + piped;
+    }
+}
+
+
+
+int main(int argc, char* argv[]) {
+    char inputString[BUFFER_SIZE]; //El argv[] de nuestra shell
+    char* parsedArgs[MAX_ARGS];
+    char* parsedArgsPiped;
+    tline* args;
+    int flagger=0; //Servirá para identificar si es void, comando o piped
+    
+    init_shell();
+    
+    do {// print shell line
+        printDir();
+
+        if (input(*inputString)==0){
+            continue;
+        }
+        
+        flagger = processString(inputString, parsedArgs, parsedArgsPiped);
+
+        // execute
+        if (flagger == 1){
+            execArgs(parsedArgs);
+        }
+
+        if (flagger == 2){
+            execArgsPiped(parsedArgs, parsedArgsPiped);
+        }
+
+    }while (1);
+
+    return 0;
 }
