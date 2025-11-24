@@ -63,9 +63,10 @@ typedef struct { //Esto es basicamente un diccionario en c
 int manejador_cd(int argc, char *argv[]); //esto es la funcion que cambia de directorio pero cd no debne manejarse mediante proceso hijo porque el directorio es parte del contexto del proceso
 int manejador_exit(int argc, char *argv[]);
 int manejador_umask(int argc, char *argv[]);
-int manejador_jobs(int argc, char *argv[]);
+int manejador_jobs(int argc, char *argv[]); //Muestra la lista de jobs
 int manejador_fg(int argc, char *argv[]);
-
+void add_job(pid_t pgid, const char *cmd);
+void remove_job(pid_t pgid);
 
 command_entry diccionariodeComandos[] = {
     {"cd", (command_func)manejador_cd},
@@ -75,6 +76,17 @@ command_entry diccionariodeComandos[] = {
     {"fg", (command_func)manejador_fg},
     {NULL, NULL}
 };
+
+
+typedef struct job{
+    int id; //id del job
+    pid_t pgid; //id del grupo de proceso
+    char* comando; //comando que contiene
+    struct job* siguiente;
+}tNodeJob;
+
+typedef tNodeJob* tJobs;
+
 
 int main(int argc, char* argv[]) {
     //char linea[BUFFER_SIZE];
@@ -152,9 +164,22 @@ int manejador_cd(int argc, char *argv[]) {
     return 0;
 }
 
-int manejador_exit(int argc, char *argv[]);
-int manejador_umask(int argc, char *argv[]);
-int manejador_jobs(int argc, char *argv[]);
+int manejador_exit(int argc, char *argv[]) {
+
+}
+
+int manejador_umask(int argc, char *argv[]) {
+
+}
+
+int manejador_jobs(int argc, char *argv[]){
+    tNodeJob* actual = tJobs;
+    while (actual != NULL) {
+        printf("[%d] Corriendo %s\n",actual->id, actual->comando);
+        actual = actual->siguiente;
+    }
+}
+
 int manejador_fg(int argc, char *argv[]);
 
 
