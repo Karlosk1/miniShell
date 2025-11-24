@@ -4,11 +4,12 @@
 #include <unistd.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <sys/types.h>
 #include "myshell.h"
 #include <libc.h>
 
-#define MAXCOM 1000
-#define MAXLIST 100
+#define BUFFER_SIZE 1024
+#define MAX_ARGS 64
 
 /*
  Funciones que tiene que tener nuestra shell
@@ -57,11 +58,20 @@ typedef struct { //Esto es basicamente un diccionario en c
     command_func func;  // puntero a la función que implementa el comando
 } command_entry;
 
-int main(int argc, char* argv[]) {
-    char* inputStdin = malloc(1024);
 
+int tokenizador(char* linea, char* inputStdin[]);
+
+int main(int argc, char* argv[]) {
+    char linea[BUFFER_SIZE];
+    char *inputStdin[MAX_ARGS]; //El argv[] de nuestra shell
+    int numArg=0;
     do { //Mientras que no se haga Ctrl+D no se exitea.
-        inputStdin = fgets(inputStdin,1024,stdin);
+        printf("MiniShell>");
+        fgets(linea,sizeof(linea),stdin);
+        numArg = tokenizador(linea,inputStdin);
+        //En este punto tenemos en inputStdin como si fuera argv y numArg como argc
+
+
 
 
     }while (1);
@@ -115,4 +125,17 @@ int input(char *str) {
     free(buf);
     return 1;
 }*/
+
+int tokenizador(char* linea,char* inputStdin[]) { //Coge los argvs y divide mandato y argumentos. Esto basicamente es tokenizar nuestra shell, basicamente lo que lee inputStdin
+    int numArg = 0;
+    char *token = strtok(linea, " \t\n"); //Tokeniza lo que nos han pasado por stdin
+
+    while (token != NULL) {
+        inputStdin[numArg++] = token; //En cada hueco de inputStdin, nuestro argv mete los tokens
+        token = strtok(NULL, " \t\n"); //Mueve al siguiente token
+    }
+    inputStdin[numArg] = NULL; //Al final metes NULL porque asi lo requiere execvp()
+    return numArg;
+}
+
 
