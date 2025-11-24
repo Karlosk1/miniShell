@@ -53,7 +53,7 @@ int input(char *str);*/
 
 
 typedef int (*command_func)(int argc, char *argv[]); //definimos un tipo que es un puntero a funcion que tenga esos argumentos. Devuelve int
-
+//
 typedef struct { //Esto es basicamente un diccionario en c
     char *name;         // nombre del comando
     command_func func;  // puntero a la función que implementa el comando
