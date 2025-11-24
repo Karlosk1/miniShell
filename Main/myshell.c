@@ -60,8 +60,21 @@ typedef struct { //Esto es basicamente un diccionario en c
 } command_entry;
 
 
-int manejador_cd(char* directorio); //esto es la funcion que cambia de directorio pero cd no debne manejarse mediante proceso hijo porque el directorio es parte del contexto del proceso
+int manejador_cd(int argc, char *argv[]); //esto es la funcion que cambia de directorio pero cd no debne manejarse mediante proceso hijo porque el directorio es parte del contexto del proceso
+int manejador_exit(int argc, char *argv[]);
+int manejador_umask(int argc, char *argv[]);
+int manejador_jobs(int argc, char *argv[]);
+int manejador_fg(int argc, char *argv[]);
 
+
+command_entry diccionariodeComandos[] = {
+    {"cd", (command_func)manejador_cd},
+    {"exit", (command_func)manejador_exit},
+    {"umask", (command_func)manejador_umask},
+    {"jobs", (command_func)manejador_jobs},
+    {"fg", (command_func)manejador_fg},
+    {NULL, NULL}
+};
 
 int main(int argc, char* argv[]) {
     //char linea[BUFFER_SIZE];
@@ -126,21 +139,22 @@ int input(char *str) {
     return 1;
 }*/
 
-int manejador_cd(char* directorio) {
-    char* dir;
-    if (strcmp(directorio,NULL)) {
-        dir = getenv("HOME");
-        if (dir == NULL) {
-            printf("cd: Variable HOME no definida\n");
-            return 1;
-        }
-    }else {
-        dir = directorio;
+int manejador_cd(int argc, char *argv[]) {
+    char *dir = (argc > 1) ? argv[1] : getenv("HOME");
+    if (!dir) {
+        fprintf(stderr, "cd: Variable HOME no definida\n");
+        return 1;
     }
-    if (chdir(dir)!=0) {
-        printf("Error: cd");
+    if (chdir(dir) != 0) {
+        perror("cd");
         return 1;
     }
     return 0;
 }
+
+int manejador_exit(int argc, char *argv[]);
+int manejador_umask(int argc, char *argv[]);
+int manejador_jobs(int argc, char *argv[]);
+int manejador_fg(int argc, char *argv[]);
+
 
