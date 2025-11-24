@@ -86,6 +86,8 @@ typedef struct job{
 }tNodeJob;
 
 typedef tNodeJob* tJobs;
+tJobs listaJobs = NULL;
+int siguienteId = 1;
 
 
 int main(int argc, char* argv[]) {
@@ -173,7 +175,7 @@ int manejador_umask(int argc, char *argv[]) {
 }
 
 int manejador_jobs(int argc, char *argv[]){
-    tNodeJob* actual = tJobs;
+    tNodeJob* actual = listaJobs;
     while (actual != NULL) {
         printf("[%d] Corriendo %s\n",actual->id, actual->comando);
         actual = actual->siguiente;
