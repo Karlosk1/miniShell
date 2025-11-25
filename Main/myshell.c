@@ -88,6 +88,12 @@ command_entry diccionariodeComandos[] = {
     {NULL, NULL}
 };
 
+void clear() {
+    printf("\033[H\033[J");
+    //\033[H Mueve el cursos a la esquina superior izquierda
+    //\033[J Borra la pantalla desde el cursor hasta el final
+}
+
 
 void init_shell() {
     clear();
@@ -255,45 +261,151 @@ void remove_job(pid_t pgid) {
         free(pAct);
     }
 }
+
+int parsePipe(char* str, char** strpiped) { //Recibe la cadena entera un un array de punteros donde pondra las dos mitades separadas por |
+    for (int i = 0; i < 2; i++) { //Extrae maximo dos tokens, antes y despues de |
+        strpiped[i] = strsep(&str, "|"); //strsep busca | devuelve lo anterior y modifica para apuntar al resto
+        if (strpiped[i] == NULL) //Si no quedan tokens
+            break;
+    }
+    return (strpiped[1] != NULL); //Devuelve 1 si hay parte derecha del pipe
+}
+
+void parseSpace(char* str, char** parsed) { //Recibe el string y rellena parsed con punteros a tokens terminando con NULL
+    int i = 0;
+
+    while ((parsed[i] = strsep(&str, " ")) != NULL) { //En cada iteracion parsed[i] apunta al proximo token
+        if (strlen(parsed[i]) == 0) continue; //Si el token es cadena vacia omite incrementar i
+        i++;
+    }
+
+    parsed[i] = NULL;
+}
+
+int ownCmdHandler(char** parsed) { //Deteceta y ejecuta comandos internos
+    if (parsed[0] == NULL) {
+        return 0; //Si no hay comando devuelve 0, no hay comando
+    }
+
+    for (int i = 0; diccionariodeComandos[i].name != NULL; i++) { //Recorre diccionario
+        if (strcmp(parsed[0], diccionariodeComandos[i].name) == 0) { //Compara para encontrarlo
+            diccionariodeComandos[i].func(0, parsed); //MAL HAY QUE METER ARGUMENTOS
+            return 1; // comando interno ejecutado
+        }
+    }
+    return 0; // no es comando interno
+}
+
+void execArgs(char** parsed) { //Ejecuta comando externo almacenado en parsed
+    pid_t pid = fork(); //Crea proceso hijo
+
+    if (pid == 0) {
+        // Hijo
+        if (execvp(parsed[0], parsed) < 0) { //Reemplaza el proceso hijo con el programa de parsed. Si exito no vuelve
+            perror("Error ejecutando el comando");
+        }
+        exit(0);
+    }
+    else if (pid > 0) {
+        // Padre
+        wait(NULL);
+        return;
+    }
+    else {
+        printf("fork failed");
+        return;
+    }
+}
+
 int processString(char* str, char** parsed, char** parsedpipe){
-    char* strpiped[2];
-    int piped = 0;
+    char* strpiped[2];//Buffer local para las dos partes si hay |
+    int piped = 0; //Flag para saber si hay pipe
 
-    piped = parsePipe(str, strpiped);
+    piped = parsePipe(str, strpiped); //LLama a parsePipe, modifica str
 
-    if (piped) {
-        parseSpace(strpiped[0], parsed);
-        parseSpace(strpiped[1], parsedpipe);
+    if (piped) { //Si hay pipe
+        parseSpace(strpiped[0], parsed); //Tokeniza por la izquierda
+        parseSpace(strpiped[1], parsedpipe); //Tokeniza por la derecha
     } else {
-        parseSpace(str, parsed);
+        parseSpace(str, parsed); //Si no hay pipe
     }
 
     if (ownCmdHandler(parsed)){
         return 0;
     } else {
-        return 1 + piped;
+        return 1 + piped; //Si no hay pipe 1+0, sino 1+1
     }
 }
 
+void execArgsPiped(char **parsed, char **parsedpipe) {
+    int pipefd[2]; //Array de dos descriptores, lectura y escritura
+    pid_t pid1, pid2; //Dos procesos
 
+    // Crear pipe
+    if (pipe(pipefd) < 0) {
+        perror("Pipe fallo");
+        return;
+    }
 
-int main(int argc, char* argv[]) {
+    // Primer hijo (lado izquierdo de |)
+    pid1 = fork();
+    if (pid1 < 0) {
+        perror("Fork fallo");
+        return;
+    }
+
+    if (pid1 == 0) {
+        // Redirigir salida estándar al extremo de escritura del pipe
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]);  // No se usa
+        close(pipefd[1]);
+        execvp(parsed[0], parsed); // Ejecuta comando. Si exito no vuelve
+        perror("Error execvp 1");
+        exit(1);
+    }
+
+    // Segundo hijo (lado derecho de |)
+    pid2 = fork();
+    if (pid2 < 0) {
+        perror("Fork fallo");
+        return;
+    }
+
+    if (pid2 == 0) {
+        // Redirigir entrada estándar al extremo de lectura del pipe
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[1]);  // No lo utiliza
+        close(pipefd[0]);
+        execvp(parsedpipe[0], parsedpipe);//Ejecuta comando derecho. No vuelve
+        perror("Error execvp 2");
+        exit(1);
+    }
+
+    // Padre
+    close(pipefd[0]);
+    close(pipefd[1]);
+
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0); //Espera a que terminen ambos
+}
+
+int main(int argc, char* argv[]) { //De momento no usamos argc, *argv[]
     char inputString[BUFFER_SIZE]; //El argv[] de nuestra shell
-    char* parsedArgs[MAX_ARGS];
-    char* parsedArgsPiped;
+    char* parsedArgs[MAX_ARGS]; //Los tokens del comando
+    char* parsedArgsPiped[MAX_ARGS]; //Guardamos los argumentos despues de un pipe
     tline* args;
     int flagger=0; //Servirá para identificar si es void, comando o piped
-    
-    init_shell();
-    
+
+    init_shell(); //Limpia pantalla
+
     do {// print shell line
         printDir();
 
-        if (input(*inputString)==0){
+        if (input(inputString)!=0){
             continue;
         }
-        
-        flagger = processString(inputString, parsedArgs, parsedArgsPiped);
+
+        flagger = processString(inputString, parsedArgs, parsedArgsPiped); //Decide el flagger
 
         // execute
         if (flagger == 1){
