@@ -111,9 +111,10 @@ void printDir(){
 }
 
 int input(char *str) {
-    char *buf = readline("\n>>> ");
+    printf("\n>>> ");
+    fgets(buf, sizeof(buf), stdin)
 
-    if (!buf) return 1; // Ctrl+D or null input
+    if (!buf) return 1; // Ctrl+C or null input
 
     if (strlen(buf) > 0) {
         add_history(buf);
