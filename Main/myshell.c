@@ -70,13 +70,13 @@ typedef tNodeJob* tJobs;
 tJobs listaJobs = NULL;
 int siguienteId = 1;
 
-int manejador_cd(int argc, char *argv[]); //esto es la funcion que cambia de directorio pero cd no debne manejarse mediante proceso hijo porque el directorio es parte del contexto del proceso
-int manejador_exit(int argc, char *argv[]);
+int manejador_cd(tline* linea); //esto es la funcion que cambia de directorio pero cd no debne manejarse mediante proceso hijo porque el directorio es parte del contexto del proceso
+int manejador_exit();
 int manejador_umask(int argc, char *argv[]);
-int manejador_jobs(int argc, char *argv[]); //Muestra la lista de jobs
-int manejador_fg(int argc, char *argv[]);
+int manejador_jobs(); //Muestra la lista de jobs
+int manejador_fg(tline* linea);
 tNodeJob* getJobXid(int id); //Obtiene el job mediante su id
-void add_job(pid_t pgid, const char *cmd);
+void add_job(pid_t pgid,int id, const char *cmd);
 void remove_job(pid_t pgid);
 
 command_entry diccionariodeComandos[] = {
@@ -110,37 +110,50 @@ void printDir(){
     printf("\nDir: %s", currentDirectory);
 }
 
-int input(char *str) {
-    printf("\n>>> ");
-    fgets(buf, sizeof(buf), stdin)
+tline* input() { //Str es donde se almacenara lo leido
+    char *str;
+    str = readline(">>> ");
 
-    if (!buf) return 1; // Ctrl+C or null input
-
-    if (strlen(buf) > 0) {
-        add_history(buf);
-        strcpy(str, buf);
-        free(buf);
-        return 0;
+    if (strlen(str)>0) {
+        add_history(str); //Se mantiene un registro de los inputs del usuario
     }
 
-    free(buf);
-    return 1;
+    if (!str) { //Esto significa CtrlD
+        printf("Saliendo...\n");
+        exit(0);
+    }
+
+    tline* linea = tokenize(str);
+    free(str);
+    return linea; //Lo devolvemos tokenizado para poder trabajar con todo lo que usar tLine
 }
 
-int manejador_cd(int argc, char *argv[]) {
-    char *dir = (argc > 1) ? argv[1] : getenv("HOME");
+
+int manejador_cd(tline* linea) {
+    char* dir;
+    tcommand comando = linea->commands[0]; //Es un unico comando ya que este manejador solo ejecuta cd
+
+    if (comando.argc > 1) {
+        dir = comando.argv[1];   // el usuario especificó un directorio
+    } else {
+        dir = getenv("HOME");  // si no, usar HOME
+    }
+
     if (!dir) {
-        fprintf(stderr, "cd: Variable HOME no definida\n");
+        printf(linea->redirect_error, "cd: Variable HOME no definida\n");
         return 1;
     }
-    if (chdir(dir) != 0) {
-        perror("cd");
-        return 1;
+
+    if (chdir(dir) == 0) {
+        printf("Cambiando a %s", dir);
+    }else {
+        printf("Error al cambiar a %s: No se encuntra o no existe tal directorio", dir);
     }
+
     return 0;
 }
 
-int manejador_exit(int argc, char *argv[]) {
+int manejador_exit() {
     printf("Saliendo de la miniShell \n");
     exit(0);
 }
@@ -174,7 +187,7 @@ int manejador_umask(int argc, char *argv[]) {
 }
 
 
-int manejador_jobs(int argc, char *argv[]){
+int manejador_jobs(){
     tNodeJob* actual = listaJobs;
     while (actual != NULL) {
         printf("[%d] Corriendo %s\n",actual->id, actual->comando);
@@ -182,11 +195,11 @@ int manejador_jobs(int argc, char *argv[]){
     }
 }
 
-int manejador_fg(int argc, char *argv[]) {
+int manejador_fg(tline* linea) {
     int id;
-
-    if (argc > 1) {
-        id = atoi(argv[1]);
+    tcommand comando = linea->commands[0]; //Cogemos el primer comando aunque haya varios ya que es el que determina el fg
+    if (comando.argc > 1) {
+        id = atoi(comando.argv[1]);
     } else {
         if (listaJobs == NULL) {
             printf("fg: no hay trabajos\n");
@@ -230,40 +243,41 @@ tNodeJob* getJobXid(int id) {
     return NULL;
 }
 
-void add_job(pid_t pgid, const char *cmd) {
+void add_job(pid_t pgid,int id, const char *cmd) {
     tNodeJob* nodo = (tNodeJob*) malloc(sizeof(tNodeJob));
+    if (nodo == NULL) {
+        printf("Error en la reserva de memoria\n");
+        return;
+    }
     nodo->pgid =pgid;
-    strcpy(nodo->comando, cmd);
+    nodo->id = id;
+    nodo->comando = strdup(cmd); //Reserva memoria
     nodo->siguiente = listaJobs;
     listaJobs = nodo;
 }
 
 void remove_job(pid_t pgid) {
-    // Búsqueda
-    int encontrado = 0;
-    tNodeJob * pAnt = NULL;
-    tNodeJob * pAct = listaJobs;
-    while (!encontrado && pAct != NULL) {
-        if (pAct->pgid == pgid) {
-            encontrado = 1;
-        } else {
-            pAnt = pAct;
-            pAct = pAct->siguiente;
-        }
+    tNodeJob *pAnt = NULL;
+    tNodeJob *pAct = listaJobs;
+
+    while (pAct != NULL) {
+        if (pAct->pgid == pgid) break;
+        pAnt = pAct;
+        pAct = pAct->siguiente;
     }
 
-    // Borrado
-    if (encontrado) {
-        if (pAnt == NULL) { // if (pAct == *l) { Eliminar 1º
-            listaJobs = (listaJobs)->siguiente;
-        } else { // Eliminar cualquiera salvo el 1º
+    if (pAct != NULL) {
+        if (pAnt == NULL)
+            listaJobs = pAct->siguiente;
+        else
             pAnt->siguiente = pAct->siguiente;
-        }
-        free(pAct);
+
+        free(pAct->comando);  // liberar string
+        free(pAct);           // liberar nodo
     }
 }
 
-int parsePipe(char* str, char** strpiped) { //Recibe la cadena entera un un array de punteros donde pondra las dos mitades separadas por |
+/*int parsePipe(char* str, char** strpiped) { //Recibe la cadena entera un un array de punteros donde pondra las dos mitades separadas por |
     for (int i = 0; i < 2; i++) { //Extrae maximo dos tokens, antes y despues de |
         strpiped[i] = strsep(&str, "|"); //strsep busca | devuelve lo anterior y modifica para apuntar al resto
         if (strpiped[i] == NULL) //Si no quedan tokens
@@ -281,44 +295,78 @@ void parseSpace(char* str, char** parsed) { //Recibe el string y rellena parsed 
     }
 
     parsed[i] = NULL;
-}
+}*/
 
-int ownCmdHandler(char** parsed) { //Deteceta y ejecuta comandos internos
-    if (parsed[0] == NULL) {
+int ownCmdHandler(tline* linea) { //Deteceta y ejecuta comandos internos
+    if (linea->ncommands == 0) return 0;
+
+    tcommand comando = linea->commands[0];
+
+    if (comando.filename == NULL) {
         return 0; //Si no hay comando devuelve 0, no hay comando
     }
 
     for (int i = 0; diccionariodeComandos[i].name != NULL; i++) { //Recorre diccionario
-        if (strcmp(parsed[0], diccionariodeComandos[i].name) == 0) { //Compara para encontrarlo
-            diccionariodeComandos[i].func(0, parsed); //MAL HAY QUE METER ARGUMENTOS
-            return 1; // comando interno ejecutado
+        if (strcmp(comando.filename, diccionariodeComandos[i].name) == 0) {
+            //Compara para encontrarlo
+            return diccionariodeComandos[i].func(comando.argc, comando.argv) == 1; //1 si exito
         }
     }
     return 0; // no es comando interno
 }
 
-void execArgs(char** parsed) { //Ejecuta comando externo almacenado en parsed
-    pid_t pid = fork(); //Crea proceso hijo
+int getNextId() {
+    return siguienteId++;
+}
+
+void execArgs(tline* linea) { //Cuando solo se ejecuta un unico comando externo
+    if (!linea || linea->ncommands == 0) return;
+
+    tcommand comando = linea->commands[0]; //Se coge el primer comando porque esta diseñado unicamente para ejecutar 1 comando
+    int bg = linea->background; //Coges el booleano de bg
+    int id = getNextId(); // ID único para el job
+
+    pid_t pid = fork(); //Proceso hijo
 
     if (pid == 0) {
-        // Hijo
-        if (execvp(parsed[0], parsed) < 0) { //Reemplaza el proceso hijo con el programa de parsed. Si exito no vuelve
-            perror("Error ejecutando el comando");
+        // === HIJO ===
+
+        // Redirección de entrada
+        if (linea->redirect_input) { //Si existe algo en esa variable
+            freopen(linea->redirect_input, "r", stdin); //El hijo redirige la entrada estandar desde ahi
         }
-        exit(0);
+
+        // Redirección de salida
+        if (linea->redirect_output) {
+            freopen(linea->redirect_output, "w", stdout); //Igual
+        }
+
+        // Redirección de errores
+        if (linea->redirect_error) {
+            freopen(linea->redirect_error, "w", stderr); //Igual
+        }
+
+        execvp(comando.argv[0], comando.argv); // Ejecuta comando. Si cierto nunca vuelve. El proceso hijo deja de ser la shell y pasa a ser el comando
+        printf("execvp");              // Si falla, mostramos error
+        exit(EXIT_FAILURE);
     }
     else if (pid > 0) {
-        // Padre
-        wait(NULL);
-        return;
+        // === PADRE ===
+
+        if (!bg) { //Foreground
+            waitpid(pid, NULL, 0); //Espera a que el hijo cambie de estado
+        } else { //No se espera(background)
+            printf("[%d] %d\t%s &\n", id, pid, comando.filename);
+            add_job(pid, id, comando.filename); // Guardamos el job
+        }
     }
     else {
-        printf("fork failed");
-        return;
+        printf("fork");
     }
 }
 
-int processString(char* str, char** parsed, char** parsedpipe){
+
+/*int processString(char* str, char** parsed, char** parsedpipe){
     char* strpiped[2];//Buffer local para las dos partes si hay |
     int piped = 0; //Flag para saber si hay pipe
 
@@ -331,93 +379,138 @@ int processString(char* str, char** parsed, char** parsedpipe){
         parseSpace(str, parsed); //Si no hay pipe
     }
 
-    if (ownCmdHandler(parsed)){
+    if (ownCmdHandler(parsed, strlen(parsed))){
         return 0;
     } else {
         return 1 + piped; //Si no hay pipe 1+0, sino 1+1
     }
-}
+}*/
 
-void execArgsPiped(char **parsed, char **parsedpipe) {
-    int pipefd[2]; //Array de dos descriptores, lectura y escritura
-    pid_t pid1, pid2; //Dos procesos
+void execArgsPiped(tline* linea) {
+    if (!linea || linea->ncommands < 2) return;
 
-    // Crear pipe
+    tcommand cmd1 = linea->commands[0]; // Comando izquierdo del pipe
+    tcommand cmd2 = linea->commands[1]; // Comando derecho del pipe
+    int bg = linea->background;
+    int id = getNextId(); // ID único si es background
+
+    int pipefd[2];
     if (pipe(pipefd) < 0) {
-        perror("Pipe fallo");
+        perror("pipe");
         return;
     }
 
-    // Primer hijo (lado izquierdo de |)
-    pid1 = fork();
+    pid_t pid1 = fork();
     if (pid1 < 0) {
-        perror("Fork fallo");
+        perror("fork");
         return;
     }
 
     if (pid1 == 0) {
-        // Redirigir salida estándar al extremo de escritura del pipe
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[0]);  // No se usa
+        // HIJO 1: lado izquierdo
+        dup2(pipefd[1], STDOUT_FILENO); // salida al pipe
+        close(pipefd[0]);
         close(pipefd[1]);
-        execvp(parsed[0], parsed); // Ejecuta comando. Si exito no vuelve
-        perror("Error execvp 1");
-        exit(1);
+
+        if (linea->redirect_input) {
+            freopen(linea->redirect_input, "r", stdin);
+        }
+
+        execvp(cmd1.argv[0], cmd1.argv);
+        perror("execvp cmd1");
+        exit(EXIT_FAILURE);
     }
 
-    // Segundo hijo (lado derecho de |)
-    pid2 = fork();
+    pid_t pid2 = fork();
     if (pid2 < 0) {
-        perror("Fork fallo");
+        perror("fork");
         return;
     }
 
     if (pid2 == 0) {
-        // Redirigir entrada estándar al extremo de lectura del pipe
-        dup2(pipefd[0], STDIN_FILENO);
-        close(pipefd[1]);  // No lo utiliza
+        // HIJO 2: lado derecho
+        dup2(pipefd[0], STDIN_FILENO); // entrada desde el pipe
         close(pipefd[0]);
-        execvp(parsedpipe[0], parsedpipe);//Ejecuta comando derecho. No vuelve
-        perror("Error execvp 2");
-        exit(1);
+        close(pipefd[1]);
+
+        if (linea->redirect_output) {
+            freopen(linea->redirect_output, "w", stdout);
+        }
+
+        if (linea->redirect_error) {
+            freopen(linea->redirect_error, "w", stderr);
+        }
+
+        execvp(cmd2.argv[0], cmd2.argv);
+        perror("execvp cmd2");
+        exit(EXIT_FAILURE);
     }
 
-    // Padre
+    // PADRE
     close(pipefd[0]);
     close(pipefd[1]);
 
-    waitpid(pid1, NULL, 0);
-    waitpid(pid2, NULL, 0); //Espera a que terminen ambos
+    if (!bg) {
+        // Foreground -> esperar a que terminen ambos
+        waitpid(pid1, NULL, 0);
+        waitpid(pid2, NULL, 0);
+    } else {
+        // Background -> registrar job solo con el primer pid y el comando completo
+        printf("[%d] %d\t%s | %s &\n", id, pid1, cmd1.filename, cmd2.filename);
+        char job_cmd[1024];
+        snprintf(job_cmd, sizeof(job_cmd), "%s | %s", cmd1.filename, cmd2.filename);
+        add_job(pid1, id, job_cmd); // Solo necesitamos un ID de job
+    }
 }
 
-int main(int argc, char* argv[]) { //De momento no usamos argc, *argv[]
-    char inputString[BUFFER_SIZE]; //El argv[] de nuestra shell
-    char* parsedArgs[MAX_ARGS]; //Los tokens del comando
-    char* parsedArgsPiped[MAX_ARGS]; //Guardamos los argumentos despues de un pipe
-    tline* args;
-    int flagger=0; //Servirá para identificar si es void, comando o piped
+void free_line(tline* linea) {
+    if (!linea) return;
 
-    init_shell(); //Limpia pantalla
+    for (int i = 0; i < linea->ncommands; i++) {
+        tcommand cmd = linea->commands[i];
 
-    do {// print shell line
-        printDir();
+        // Liberar cada string de argv
+        for (int j = 0; j < cmd.argc; j++) {
+            free(cmd.argv[j]);
+        }
+        free(cmd.argv);
 
-        if (input(inputString)!=0){
+        // filename apunta a argv[0], así que no hay que liberarlo por separado
+    }
+
+    free(linea->commands);
+    free(linea);
+}
+
+
+int main() {
+    tline* entrada;
+
+    init_shell(); // Limpia pantalla y saluda
+
+    while (1) {
+        printDir();          // Muestra directorio actual
+        entrada = input();   // Obtiene línea tokenizada
+
+        if (!entrada) continue; // Nada que hacer
+
+        // Comprobamos si es comando interno
+        if (ownCmdHandler(entrada)) {
+            free_line(entrada); // Liberamos memoria del tline
             continue;
         }
 
-        flagger = processString(inputString, parsedArgs, parsedArgsPiped); //Decide el flagger
-
-        // execute
-        if (flagger == 1){
-            execArgs(parsedArgs);
+        // Ejecutamos comando externo
+        if (entrada->ncommands == 1) {
+            // Un solo comando -> execArgs
+            execArgs(entrada);
+        } else if (entrada->ncommands >= 2) {
+            // Pipe -> execArgsPiped
+            execArgsPiped(entrada);
         }
 
-        if (flagger == 2){
-            execArgsPiped(parsedArgs, parsedArgsPiped);
-        }
-
-    }while (1);
+        free_line(entrada); // Liberar memoria de tline después de ejecutar
+    }
 
     return 0;
 }
