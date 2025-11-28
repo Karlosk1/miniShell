@@ -11,6 +11,7 @@ add_executable(miniShell
         Main/myshell.c   # contiene main()
         Main/parser.c    # implementación del parser
         Main/test.c
+        Main/myshell.c
         Main/myshell.c      # si quieres compilarlo, opcional
 )
 

@@ -127,7 +127,7 @@ tline* input() { //Str es donde se almacenara lo leido
 }
 
 void add_job(pid_t pgid,int id, const char *cmd) {
-    tNodeJob* nodo = realloc(tNodeJob, (tJobs.size+1)*sizeof(tNodeJob)); //Hacer la funcion size
+    tNodeJob* nodo = (tNodeJob*) malloc(sizeof(tNodeJob)); //Hacer la funcion size
     if (nodo == NULL) {
         printf("Error en la reserva de memoria\n");
         return;
