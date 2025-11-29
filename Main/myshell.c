@@ -269,6 +269,85 @@ void execArgs(tline* linea) {
 }
 
 void execArgsPiped(tline* linea) {
+    int n = linea->ncommands;
+    int bg = linea->background;
+
+    int id = getNextId();
+    pid_t pids[n];
+    int pipes[n - 1][2];
+
+    // Crear los pipes necesarios
+    for (int i = 0; i < n - 1; i++) {
+        if (pipe(pipes[i]) < 0) {
+            perror("pipe");
+            return;
+        }
+    }
+
+    // Crear todos los procesos
+    for (int i = 0; i < n; i++) {
+        pid_t pid = fork();
+        pids[i] = pid;
+
+        if (pid == 0) { // hijo
+            // Redirecciones globales SOLO aplican al primer/último comando
+            if (i == 0 && linea->redirect_input)
+                freopen(linea->redirect_input, "r", stdin);
+
+            if (i == n - 1 && linea->redirect_output)
+                freopen(linea->redirect_output, "w", stdout);
+
+            if (i == n - 1 && linea->redirect_error)
+                freopen(linea->redirect_error, "w", stderr);
+
+            // Conectar pipes
+            if (i > 0) {  // No es el primero → recibe entrada del pipe anterior
+                dup2(pipes[i - 1][0], STDIN_FILENO);
+            }
+
+            if (i < n - 1) {  // No es el último → envía salida al pipe siguiente
+                dup2(pipes[i][1], STDOUT_FILENO);
+            }
+
+            // Cerrar todos los pipes en el hijo
+            for (int k = 0; k < n - 1; k++) {
+                close(pipes[k][0]);
+                close(pipes[k][1]);
+            }
+
+            // Ejecutar
+            execvp(linea->commands[i].argv[0], linea->commands[i].argv);
+            perror("execvp");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Cerrar los pipes en padre
+    for (int i = 0; i < n - 1; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+
+    // Si es foreground se espera a todos los hijos
+    if (!bg) {
+        for (int i = 0; i < n; i++) {
+            waitpid(pids[i], NULL, 0);
+        }
+    } else {
+        // Añadir cadena para mostrar en "jobs"
+        char job_cmd[1024] = "";
+        for (int i = 0; i < n; i++) {
+            strcat(job_cmd, linea->commands[i].filename);
+            if (i < n - 1) strcat(job_cmd, " | ");
+        }
+
+        printf("[%d] %d\t%s &\n", id, pids[0], job_cmd);
+        add_job(pids[0], id, job_cmd);
+    }
+}
+
+/*
+void execArgsPiped(tline* linea) {
     if (!linea || linea->ncommands < 2) return;
 
     tcommand cmd1 = linea->commands[0];
@@ -307,6 +386,7 @@ void execArgsPiped(tline* linea) {
         add_job(pid1, id, job_cmd);
     }
 }
+*/
 
 void free_line(tline* linea) {
     if (!linea) return;
