@@ -3,65 +3,36 @@
 #include <readline/readline.h>
 #include <unistd.h>
 #include <readline/history.h>
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
+
+#ifdef __APPLE__
 #include <libc.h>
+#endif
+
 #include "parser.h"
 #include "myshell.h"
 
 #define BUFFER_SIZE 1024
-#define MAX_ARGS 64
 
-/*
- Funciones que tiene que tener nuestra shell
- - Ejecutar en foreground lineas con un solo mandato y 0 mas argumentos
- - Redireccion de stdin desde archivo y redireccion de salida a archivo
- - Ejecutar en foreground lineas con dos mandatos con sus respectivos argumentos haciendo pipe y posible redireccion de stdin desde archivo y redireccion de salida a archivo
- - Lo mismo con mas de dos mandatos
-- Ser capaz de ejecutar el mandato cd (0,5 puntos). Mientras que la mayoría de los mandatos son programas
-del sistema, cd es un mandato interno que debe ofrecer el propio intérprete de mandatos. El mandato cd debe
-permitir el acceso a través de rutas absolutas y relativas, además de la posibilidad de acceder al directorio
-especificado en la variable HOME si no recibe ningún argumento, escribiendo la ruta absoluta del nuevo
-directorio actual de trabajo. Para el correcto cambio de directorio el mandato cd se debe ejecutar sin pipes.
-- Ejecutar exit
-- Ser capaz de ejecutar el mandato interno umask (1 punto). Este mandato controla la máscara con los permisos
-de creación de nuevos ficheros. Cuando umask imprima los permisos por la salida estándar deberá hacerlo
-en forma numérica. Bastará con admitir el parámetro mode únicamente en formato octal (con un 0
-seguido de tres dígitos octales). Recuérdese que el mandato umask emplea la forma octal para especificar
-los permisos que no se establecerán.
-- Ser capaz de reconocer y ejecutar tanto en foreground como en background líneas con más de dos mandatos
-con sus argumentos, enlazados con ‘|’, con redirección de entrada estándar desde archivo y redirección de
-salida a archivo. Para su correcta demostración, se deben realizar los mandatos internos jobs y fg (2 puntos):
-o jobs: Muestra la lista de procesos que se están ejecutando en segundo plano en la minishell (no es
-necesario considerar aquellos procesos pausados con Ctrl-D). El formato de salida será similar al del
-mandato jobs del sistema:
-[1]+ Running find / -name hola | grep h &
-- Reanudar la ejecucion de proceso en background identificado por el numero obtenido en jobs. SI no se le pasa ningun id sera el ultimo mandato en background
-- Evitar que los mandatos lanzados en background y el minishell mueran al enviar desde el teclado la señal
-SIGINT, mientras los procesos en foreground responderán ante ellas. El comportamiento del intérprete de
-mandatos al pulsar Ctrl-C deberá ser similar al de bash.
- */
-
-//Cada proceso se maneja dentro del main. Las funciones que debemos de implementar a parte son los manejadores de esos procesos
-//Es decir si estamos en el proceso de cd, el proceso llama a una funcion EXTERNA que cambia el directorio y lo devuelve al proceso
-
-/*void init_shell();
-
-void printDir();
-
-int input(char *str);*/
-
-typedef struct job {
+// --- ESTRUCTURA DE JOBS (ARRAY DINÁMICO) ---
+typedef struct {
     int id;
     pid_t pgid;
     char* comando;
-    struct job* siguiente;
-} tNodeJob;
+} tJob;
 
-typedef tNodeJob* tJobs;
-
-tJobs listaJobs = NULL;
+// Variables globales para el array dinámico
+tJob* jobs_array = NULL;
+int jobs_count = 0;
+int jobs_capacity = 0;
 int siguienteId = 1;
 
-// Comandos internos reciben tline*
+// --- DEFINICIONES DE TIPOS PARA COMANDOS ---
 typedef int (*command_func_tline)(tline* linea);
 
 typedef struct {
@@ -69,14 +40,13 @@ typedef struct {
     command_func_tline func;
 } command_entry;
 
-// Declaración de manejadores
+// Declaraciones de funciones
 int manejador_cd(tline* linea);
 int manejador_exit(tline* linea);
 int manejador_umask(tline* linea);
 int manejador_jobs(tline* linea);
 int manejador_fg(tline* linea);
 
-// Diccionario de comandos internos
 command_entry diccionariodeComandos[] = {
     {"cd", manejador_cd},
     {"exit", manejador_exit},
@@ -86,87 +56,71 @@ command_entry diccionariodeComandos[] = {
     {NULL, NULL}
 };
 
+// --- UTILIDADES ---
 
 void clear() {
     printf("\033[H\033[J");
-    //\033[H Mueve el cursos a la esquina superior izquierda
-    //\033[J Borra la pantalla desde el cursor hasta el final
 }
 
-
-void init_shell() {
-    clear();
-    char* username = getenv("USER");
-    printf("\n\n\nUSER is: @%s\n", username);
-    sleep(1);
-    clear();
+void manejador_sigint(int sig) {
+    printf("\n");
+    rl_on_new_line();
+    rl_redisplay();
 }
 
+// Función para añadir jobs al array dinámico
+void add_job(pid_t pgid, int id, const char *cmd) {
+    // Si el array está lleno o no existe, redimensionamos
+    if (jobs_count >= jobs_capacity) {
+        int new_capacity = (jobs_capacity == 0) ? 4 : jobs_capacity * 2;
+        tJob* temp = realloc(jobs_array, new_capacity * sizeof(tJob));
 
-void printDir(){
-    char currentDirectory[1024];
-    getcwd(currentDirectory, sizeof(currentDirectory));
-    printf("\nDir: %s", currentDirectory);
-}
-
-tline* input() { //Str es donde se almacenara lo leido
-    char *str = readline(">>> ");
-
-    if (!str) { //Esto significa CtrlD
-            printf("Saliendo...\n");
-            exit(0);
-    }
-
-    if (strlen(str)>0) {
-        add_history(str); //Se mantiene un registro de los inputs del usuario
-    }
-
-    tline* linea = tokenize(str);
-    free(str);
-    return linea; //Lo devolvemos tokenizado para poder trabajar con todo lo que usar tLine
-}
-
-void add_job(pid_t pgid,int id, const char *cmd) {
-    tNodeJob* nodo = (tNodeJob*) malloc(sizeof(tNodeJob)); //Hacer la funcion size
-    if (nodo == NULL) {
-        printf("Error en la reserva de memoria\n");
-        return;
-    }
-    nodo->pgid =pgid;
-    nodo->id = id;
-    nodo->comando = strdup(cmd); //Reserva memoria
-    nodo->siguiente = listaJobs;
-    listaJobs = nodo;
-}
-
-void remove_job(pid_t pgid) {
-    tNodeJob *pAnt = NULL;
-    tNodeJob *pAct = listaJobs;
-
-    while (pAct != NULL) {
-        if (pAct->pgid == pgid) break;
-        pAnt = pAct;
-        pAct = pAct->siguiente;
-    }
-
-    if (pAct != NULL) {
-        if (pAnt == NULL)
-            listaJobs = pAct->siguiente;
-        else
-            pAnt->siguiente = pAct->siguiente;
-
-        free(pAct->comando);  // liberar string
-        free(pAct);           // liberar nodo
-    }
-}
-
-tNodeJob* getJobXid(int id) {
-    tNodeJob* nodo = listaJobs;
-    while (nodo!= NULL) {
-        if (nodo->id == id) {
-            return nodo;
+        if (temp == NULL) {
+            perror("Error realloc job");
+            return;
         }
-        nodo = nodo->siguiente;
+        jobs_array = temp;
+        jobs_capacity = new_capacity;
+    }
+
+    // Añadimos el nuevo job
+    jobs_array[jobs_count].pgid = pgid;
+    jobs_array[jobs_count].id = id;
+    jobs_array[jobs_count].comando = strdup(cmd); // Copiamos la cadena
+    jobs_count++;
+}
+
+// Función para borrar jobs del array dinámico
+void remove_job(pid_t pgid) {
+    int index = -1;
+
+    // Buscar el índice
+    for (int i = 0; i < jobs_count; i++) {
+        if (jobs_array[i].pgid == pgid) {
+            index = i;
+            break;
+        }
+    }
+
+    if (index != -1) {
+        // Liberar la memoria del string del comando
+        free(jobs_array[index].comando);
+
+        // Desplazar los elementos siguientes hacia atrás para tapar el hueco
+        for (int i = index; i < jobs_count - 1; i++) {
+            jobs_array[i] = jobs_array[i + 1];
+        }
+
+        jobs_count--;
+    }
+}
+
+// Obtener un job por su ID (para fg)
+tJob* getJobXid(int id) {
+    for (int i = 0; i < jobs_count; i++) {
+        if (jobs_array[i].id == id) {
+            return &jobs_array[i];
+        }
     }
     return NULL;
 }
@@ -175,20 +129,69 @@ int getNextId() {
     return siguienteId++;
 }
 
+void init_shell() {
+    clear();
+    signal(SIGINT, manejador_sigint);
+    signal(SIGQUIT, SIG_IGN);
+
+    char* username = getenv("USER");
+    printf("\n\n\nUSER is: @%s\n", username);
+    sleep(1);
+    clear();
+}
+
+void printDir(){
+    char currentDirectory[1024];
+    if (getcwd(currentDirectory, sizeof(currentDirectory)) != NULL)
+        printf("\nDir: %s", currentDirectory);
+    else
+        perror("getcwd");
+}
+
+tline* input() {
+    char *str = readline(">>> ");
+
+    if (!str) {
+        printf("\nSaliendo...\n");
+        // Limpieza de memoria del array antes de salir por Ctrl-D
+        if(jobs_array) {
+            for(int i=0; i<jobs_count; i++) free(jobs_array[i].comando);
+            free(jobs_array);
+        }
+        exit(0);
+    }
+
+    if (strlen(str) > 0) {
+        add_history(str);
+    }
+
+    // IMPORTANTE: No hacemos free(str) aquí porque tokenize podría
+    // estar usando punteros a esta cadena internamente.
+    tline* linea = tokenize(str);
+
+    return linea;
+}
+
+// --- MANEJADORES DE COMANDOS ---
 
 int manejador_cd(tline* linea) {
     tcommand comando = linea->commands[0];
     char* dir = (comando.argc > 1) ? comando.argv[1] : getenv("HOME");
     if (!dir) { printf("cd: Variable HOME no definida\n"); return 1; }
-    if (chdir(dir) == 0) printf("Cambiando a %s\n", dir);
-    else printf("Error al cambiar a %s: No existe\n", dir);
+    if (chdir(dir) != 0) {
+        perror("cd");
+    }
     return 0;
 }
 
 int manejador_exit(tline* linea){
     printf("Saliendo de la miniShell \n");
+    // Limpieza de memoria del array
+    if(jobs_array) {
+        for(int i=0; i<jobs_count; i++) free(jobs_array[i].comando);
+        free(jobs_array);
+    }
     exit(0);
-    return 0;
 }
 
 int manejador_umask(tline* linea) {
@@ -197,12 +200,12 @@ int manejador_umask(tline* linea) {
     if (cmd.argc == 1) {
         old_mask = umask(0);
         umask(old_mask);
-        printf("0%03o\n", old_mask);
+        printf("%03o\n", old_mask);
         return 0;
     }
     if (cmd.argc == 2) {
         char *endptr;
-        mode_t new_mask = strtol(cmd.argv[1], &endptr, 8);
+        mode_t new_mask = (mode_t)strtol(cmd.argv[1], &endptr, 8);
         if (*endptr != '\0') { fprintf(stderr, "umask: formato octal inválido: %s\n", cmd.argv[1]); return 1; }
         umask(new_mask);
         return 0;
@@ -212,41 +215,58 @@ int manejador_umask(tline* linea) {
 }
 
 int manejador_jobs(tline* linea){
-    tNodeJob* actual = listaJobs;
-    while (actual != NULL) {
-        printf("[%d] Corriendo %s\n",actual->id, actual->comando);
-        actual = actual->siguiente;
+    for (int i = 0; i < jobs_count; i++) {
+        printf("[%d]+ Running\t%s\n", jobs_array[i].id, jobs_array[i].comando);
     }
     return 0;
 }
 
 int manejador_fg(tline* linea) {
     tcommand comando = linea->commands[0];
-    int id = (comando.argc > 1) ? atoi(comando.argv[1]) : (listaJobs ? listaJobs->id : -1);
-    if (id == -1) { printf("fg: no hay trabajos\n"); return 1; }
 
-    tNodeJob *job = getJobXid(id);
+    // Si no pasan argumentos, cogemos el último job (LIFO)
+    int id = -1;
+    if (comando.argc > 1) {
+        id = atoi(comando.argv[1]);
+    } else {
+        if (jobs_count > 0) {
+            id = jobs_array[jobs_count - 1].id;
+        }
+    }
+
+    if (id == -1) { printf("fg: no hay trabajos actuales\n"); return 1; }
+
+    tJob *job = getJobXid(id);
     if (!job) { printf("fg: job %d no encontrado\n", id); return 1; }
 
-    tcsetpgrp(STDIN_FILENO, job->pgid);
+    pid_t pgid = job->pgid;
     printf("%s\n", job->comando);
-    kill(-job->pgid, SIGCONT);
-    waitpid(-job->pgid, NULL, WUNTRACED);
+
+    tcsetpgrp(STDIN_FILENO, pgid);
+    kill(-pgid, SIGCONT);
+    waitpid(-pgid, NULL, WUNTRACED);
     tcsetpgrp(STDIN_FILENO, getpgrp());
-    remove_job(job->pgid);
+
+    remove_job(pgid);
     return 0;
 }
 
+// Devuelve 1 si ejecutó un comando interno, 0 si no encontró ninguno
 int ownCmdHandler(tline* linea) {
     if (linea->ncommands == 0 || !linea->commands[0].filename) return 0;
     tcommand cmd = linea->commands[0];
 
     for (int i = 0; diccionariodeComandos[i].name != NULL; i++) {
-        if (strcmp(cmd.filename, diccionariodeComandos[i].name) == 0)
-            return diccionariodeComandos[i].func(linea);
+        if (strcmp(cmd.filename, diccionariodeComandos[i].name) == 0) {
+            // Ejecutamos la función asociada
+            diccionariodeComandos[i].func(linea);
+            return 1; // IMPORTANTE: Retornamos 1 indicando que FUE manejado
+        }
     }
-    return 0;
+    return 0; // No era un comando interno
 }
+
+// --- EJECUCIÓN ---
 
 void execArgs(tline* linea) {
     if (!linea || linea->ncommands == 0) return;
@@ -257,141 +277,91 @@ void execArgs(tline* linea) {
     pid_t pid = fork();
 
     if (pid == 0) {
+        // PROCESO HIJO
+        signal(SIGINT, SIG_DFL);
+        signal(SIGQUIT, SIG_DFL);
+
         if (linea->redirect_input) freopen(linea->redirect_input, "r", stdin);
         if (linea->redirect_output) freopen(linea->redirect_output, "w", stdout);
         if (linea->redirect_error) freopen(linea->redirect_error, "w", stderr);
+
         execvp(cmd.argv[0], cmd.argv);
-        perror("execvp"); exit(EXIT_FAILURE);
+        fprintf(stderr, "%s: no se encontró la orden\n", cmd.argv[0]);
+        exit(EXIT_FAILURE);
     } else if (pid > 0) {
-        if (!bg) waitpid(pid, NULL, 0);
-        else { printf("[%d] %d\t%s &\n", id, pid, cmd.filename); add_job(pid, id, cmd.filename); }
-    } else perror("fork");
+        // PROCESO PADRE
+        if (!bg) {
+            waitpid(pid, NULL, 0);
+        } else {
+            printf("[%d] %d\t%s &\n", id, pid, cmd.filename);
+            add_job(pid, id, cmd.filename);
+        }
+    } else {
+        perror("fork");
+    }
 }
 
 void execArgsPiped(tline* linea) {
     int n = linea->ncommands;
     int bg = linea->background;
-
     int id = getNextId();
     pid_t pids[n];
     int pipes[n - 1][2];
 
-    // Crear los pipes necesarios
     for (int i = 0; i < n - 1; i++) {
-        if (pipe(pipes[i]) < 0) {
-            perror("pipe");
-            return;
-        }
+        if (pipe(pipes[i]) < 0) { perror("pipe"); return; }
     }
 
-    // Crear todos los procesos
     for (int i = 0; i < n; i++) {
         pid_t pid = fork();
+        if (pid < 0) { perror("fork"); return; }
+
         pids[i] = pid;
 
-        if (pid == 0) { // hijo
-            // Redirecciones globales SOLO aplican al primer/último comando
-            if (i == 0 && linea->redirect_input)
-                freopen(linea->redirect_input, "r", stdin);
+        if (pid == 0) { // Hijo
+            signal(SIGINT, SIG_DFL);
+            signal(SIGQUIT, SIG_DFL);
 
-            if (i == n - 1 && linea->redirect_output)
-                freopen(linea->redirect_output, "w", stdout);
-
-            if (i == n - 1 && linea->redirect_error)
-                freopen(linea->redirect_error, "w", stderr);
-
-            // Conectar pipes
-            if (i > 0) {  // No es el primero → recibe entrada del pipe anterior
+            if (i == 0) {
+                if (linea->redirect_input) freopen(linea->redirect_input, "r", stdin);
+            } else {
                 dup2(pipes[i - 1][0], STDIN_FILENO);
             }
 
-            if (i < n - 1) {  // No es el último → envía salida al pipe siguiente
+            if (i == n - 1) {
+                if (linea->redirect_output) freopen(linea->redirect_output, "w", stdout);
+                if (linea->redirect_error) freopen(linea->redirect_error, "w", stderr);
+            } else {
                 dup2(pipes[i][1], STDOUT_FILENO);
             }
 
-            // Cerrar todos los pipes en el hijo
             for (int k = 0; k < n - 1; k++) {
                 close(pipes[k][0]);
                 close(pipes[k][1]);
             }
 
-            // Ejecutar
             execvp(linea->commands[i].argv[0], linea->commands[i].argv);
             perror("execvp");
             exit(EXIT_FAILURE);
         }
     }
 
-    // Cerrar los pipes en padre
     for (int i = 0; i < n - 1; i++) {
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
 
-    // Si es foreground se espera a todos los hijos
     if (!bg) {
-        for (int i = 0; i < n; i++) {
-            waitpid(pids[i], NULL, 0);
-        }
+        for (int i = 0; i < n; i++) waitpid(pids[i], NULL, 0);
     } else {
-        // Añadir cadena para mostrar en "jobs"
         char job_cmd[1024] = "";
         for (int i = 0; i < n; i++) {
             strcat(job_cmd, linea->commands[i].filename);
             if (i < n - 1) strcat(job_cmd, " | ");
         }
-
         printf("[%d] %d\t%s &\n", id, pids[0], job_cmd);
         add_job(pids[0], id, job_cmd);
     }
-}
-
-/*
-void execArgsPiped(tline* linea) {
-    if (!linea || linea->ncommands < 2) return;
-
-    tcommand cmd1 = linea->commands[0];
-    tcommand cmd2 = linea->commands[1];
-    int bg = linea->background;
-    int id = getNextId();
-    int pipefd[2];
-
-    if (pipe(pipefd) < 0) { perror("pipe"); return; }
-
-    pid_t pid1 = fork();
-    if (pid1 == 0) {
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[0]); close(pipefd[1]);
-        if (linea->redirect_input) freopen(linea->redirect_input, "r", stdin);
-        execvp(cmd1.argv[0], cmd1.argv);
-        perror("execvp cmd1"); exit(EXIT_FAILURE);
-    }
-
-    pid_t pid2 = fork();
-    if (pid2 == 0) {
-        dup2(pipefd[0], STDIN_FILENO);
-        close(pipefd[0]); close(pipefd[1]);
-        if (linea->redirect_output) freopen(linea->redirect_output, "w", stdout);
-        if (linea->redirect_error) freopen(linea->redirect_error, "w", stderr);
-        execvp(cmd2.argv[0], cmd2.argv);
-        perror("execvp cmd2"); exit(EXIT_FAILURE);
-    }
-
-    close(pipefd[0]); close(pipefd[1]);
-    if (!bg) { waitpid(pid1, NULL, 0); waitpid(pid2, NULL, 0); }
-    else {
-        char job_cmd[1024];
-        snprintf(job_cmd, sizeof(job_cmd), "%s | %s", cmd1.filename, cmd2.filename);
-        printf("[%d] %d\t%s &\n", id, pid1, job_cmd);
-        add_job(pid1, id, job_cmd);
-    }
-}
-*/
-
-void free_line(tline* linea) {
-    if (!linea) return;
-    if (linea->commands) free(linea->commands);
-    free(linea);
 }
 
 int main() {
@@ -401,17 +371,25 @@ int main() {
     while (1) {
         printDir();
         entrada = input();
+
         if (!entrada) continue;
 
-        if (entrada->commands && entrada->commands->filename &&
-            strcmp(entrada->commands->filename, "exit") == 0) break;
+        // 1. Intentamos ejecutar comando interno
+        if (ownCmdHandler(entrada)) {
+            // Si devuelve 1, ya se ejecutó. NO liberamos entrada porque causa error.
+            continue;
+        }
 
-        if (ownCmdHandler(entrada)) { free_line(entrada); continue; }
+        // 2. Si no es interno, ejecutamos externo
+        if (entrada->ncommands == 1) {
+            execArgs(entrada);
+        } else if (entrada->ncommands >= 2) {
+            execArgsPiped(entrada);
+        }
 
-        if (entrada->ncommands == 1) execArgs(entrada);
-        else if (entrada->ncommands >= 2) execArgsPiped(entrada);
-
-        free_line(entrada);
+        // FIX: Eliminado liberar_tline(entrada) o free(entrada).
+        // La librería parser.h que usas parece retornar un puntero estático
+        // o gestionado internamente que no admite free().
     }
     return 0;
 }
