@@ -10,6 +10,9 @@
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h> // Necesario para gestionar interrupciones de señal
+#include <readline/readline.h>
+#include <readline/history.h>
+
 
 #ifdef __APPLE__
 #include <libc.h>
@@ -62,6 +65,7 @@ void clear() {
 
 // FIX: Ctrl+C (Usamos un manejador simple, la magia está en sigaction)
 void manejador_sigint(int sig) {
+    rl_replace_line("", 0);
     printf("\n");
     rl_on_new_line();
     rl_redisplay();
@@ -112,17 +116,14 @@ tJob* getJobXid(int id) {
 int getNextId() { return siguienteId++; }
 
 void check_finished_jobs() {
-    pid_t pid;
-    int status;
-    // Comprueba si algún hijo ha terminado sin bloquear (WNOHANG)
-    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        for (int i = 0; i < jobs_count; i++) {
-            if (jobs_array[i].pgid == pid) {
-                // Mensaje de Done
-                printf("[%d]+  Done\t\t%s\n", jobs_array[i].id, jobs_array[i].comando);
-                remove_job_by_index(i);
-                break;
-            }
+    for (int i = 0; i < jobs_count; i++) {
+        int status;
+        pid_t result = waitpid(-jobs_array[i].pgid, &status, WNOHANG);
+
+        if (result > 0) {
+            printf("[%d]+  Done\t\t%s\n", jobs_array[i].id, jobs_array[i].comando);
+            remove_job_by_index(i);
+            i--; // Imprescindible tras eliminar un elemento del array
         }
     }
 }
@@ -215,17 +216,14 @@ int manejador_exit(tline* linea) {
 
 int manejador_umask(tline* linea) {
     tcommand cmd = linea->commands[0];
+    mode_t old_mask = umask(0);
+    umask(old_mask);
 
-    // Solo mostrar
     if (cmd.argc == 1) {
-        mode_t current = umask(0);
-        umask(current); // Restauramos
-        printf("%03o\n", current);
+        printf("%03o\n", old_mask);
     }
-    // Cambiar máscara
     else if (cmd.argc == 2) {
         char *endptr;
-        // strtol base 8 gestiona "077" y "77" igual
         long val = strtol(cmd.argv[1], &endptr, 8);
 
         if (*endptr != '\0' || val < 0 || val > 0777) {
@@ -235,15 +233,11 @@ int manejador_umask(tline* linea) {
 
         mode_t new_mask = (mode_t)val;
         umask(new_mask);
-
-        // FIX Umask: Imprimir confirmación para el usuario
-        printf("Mascara cambiada a: %03o\n", new_mask);
-    }
-    else {
-        printf("Uso: umask [octal]\n");
+        printf("%03o\n", new_mask);
     }
     return 0;
 }
+
 
 int manejador_jobs(tline* linea) {
     for (int i = 0; i < jobs_count; i++)
@@ -276,14 +270,14 @@ int manejador_fg(tline* linea) {
     // Continuar si estaba parado
     kill(-pgid, SIGCONT);
 
-    // Esperar
-    waitpid(-pgid, NULL, WUNTRACED);
+    int status;
+    waitpid(-pgid, &status, WUNTRACED);
 
-    // Recuperar terminal
     tcsetpgrp(STDIN_FILENO, getpgrp());
 
-    // Sacar de la lista
-    remove_job(pgid);
+    if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        remove_job(pgid);
+    }
     return 0;
 }
 
@@ -293,10 +287,8 @@ int ownCmdHandler(tline* linea) {
     if (linea->ncommands != 1) return 0;
 
     // Verificamos tanto filename como argv[0] por seguridad
-    char* cmdName = linea->commands[0].filename;
-    if (!cmdName && linea->commands[0].argc > 0) {
-        cmdName = linea->commands[0].argv[0];
-    }
+    char* cmdName = linea->commands[0].argv[0]; // Siempre argv[0]
+    if (!cmdName) return 0;
 
     if (!cmdName) return 0;
 
