@@ -16,7 +16,7 @@
 #endif
 
 
-//Declaramos TAD jobs como array dinamico
+//TAD jobs como array dinamico
 
 typedef struct {
     int id;
@@ -56,18 +56,14 @@ command_entry diccionariodeComandos[] = {
     {NULL, NULL}
 };
 
-// Limpiar la entrada
-
 void limpiarEntrada() {
     printf("\033[H\033[J"); //033 es ESC en octal, codigo de escape en terminal [H lo pone la izquierda del todo el cursor. [J limpia desde el cursor hasta el final de la pantalla. como estamos a la izquierda del todo borra toda la pantalla
 }
 
-// Manejador Ctrl+C
-
 void manejador_CrtlC() {
 
     // Imprimir salto de línea antes del prompt
-    write(STDOUT_FILENO, "\n", 1); //Escribe en el descriptpr de archivo standar de salida un \n de 1 byte
+    write(STDOUT_FILENO, "\n", 1); //Escribe en el descriptor de archivo standar de salida un \n de 1 byte
 
     // Limpiar la línea actual
     rl_replace_line("", 0);
@@ -136,7 +132,7 @@ void comprobarJobsTerminados() {
 
         int estatus;
 
-        pid_t resultado = waitpid(-jobs_Array[i].pgid, &estatus, WNOHANG);
+        pid_t resultado = waitpid(-jobs_Array[i].pgid, &estatus, WNOHANG); // Espera sin bloqueo por cualquier proceso del grupo pgid
 
         if (resultado > 0) {
             printf("[%d]+  Done\t\t%s\n", jobs_Array[i].id, jobs_Array[i].comando);
@@ -151,7 +147,7 @@ void comprobarJobsTerminados() {
 void iniciar_Shell() {
     limpiarEntrada();
 
-    // readline no maneja señales por sí mismo
+    // readline no maneja todas las señales por sí mismo
     rl_catch_signals = 0;
 
     // FIX Ctrl+C: usamos sigaction para manejar SIGINT
@@ -179,7 +175,7 @@ tline* entrada() {
     char *str = readline("msh> ");
 
     if (str == NULL) {
-        if (errno == EINTR) { // Ctrl+C
+        if (errno == EINTR) {
             errno = 0;
             return NULL;      // vuelve al bucle principal y se reimprime
         }
@@ -336,12 +332,12 @@ int manejador_internas(tline* linea) {
     return 0; // No manejado (será externo)
 }
 
-// --- EJECUCION ---
+// Ejecucion
 
 void execArgs(tline* linea) {
     tcommand cmd = linea->commands[0];
     int bg = linea->background;
-    int id = getSiguienteId();
+    int id = getSiguienteId(); // Reservamos un ID antes del fork para que padre e hijo lo conozcan
     pid_t pid = fork();
 
     if (pid == 0) { // Hijo
@@ -381,19 +377,22 @@ void execArgsPiped(tline* linea) {
     int pipes[n - 1][2];
     pid_t pids[n];
 
-    for (int i = 0; i < n - 1; i++) pipe(pipes[i]);
+    for (int i = 0; i < n - 1; i++) pipe(pipes[i]); // Crear N-1 pipes para conectar cada comando con el siguiente
 
     for (int i = 0; i < n; i++) {
         pid_t pid = fork();
         if (i == 0) group_pid = pid;
         pids[i] = pid;
-
+        
         if (pid == 0) {
-            setpgid(0, group_pid);
+            // Todos los procesos en la pipeline comparten el mismo PGID
+            setpgid(0, group_pid); 
             // Restaurar señales
             signal(SIGINT, SIG_DFL); signal(SIGQUIT, SIG_DFL);
             signal(SIGTSTP, SIG_DFL); signal(SIGTTOU, SIG_DFL); signal(SIGTTIN, SIG_DFL);
 
+
+            // Gestionar redirecciones y flujo entre procesos
             if (i == 0 && linea->redirect_input) freopen(linea->redirect_input, "r", stdin);
             else if (i > 0) dup2(pipes[i-1][0], STDIN_FILENO);
 
@@ -435,9 +434,6 @@ int main() {
     tline* entrada;
 
     while (1) {
-        // check_finished_jobs();  // opcional
-        // printDir();             // comentado
-
         entrada = entrada();
         if (!entrada) continue; // línea vacía o Ctrl+C
 
