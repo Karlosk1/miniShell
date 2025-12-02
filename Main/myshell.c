@@ -280,11 +280,13 @@ int manejador_fg(tline* linea) {
 
     // Obtener ID
 
-    //Si hay mas de un job corriendo en bg
+    // Si hay mas de un job corriendo en bg
     if (cmd.argc > 1) {
         id = atoi(cmd.argv[1]);
     } else {
-        if (contador_Jobs > 0) id = jobs_Array[contador_Jobs - 1].id;
+        if (contador_Jobs > 0) {
+            id = jobs_Array[contador_Jobs - 1].id;
+        }
     }
 
     if (id == -1) {
@@ -309,6 +311,9 @@ int manejador_fg(tline* linea) {
 
     int estatus;
     waitpid(-pgid, &estatus, WUNTRACED);
+
+    // Añadir salto de línea tras Ctrl-C o finalización del job
+    printf("\n");
 
     tcsetpgrp(STDIN_FILENO, getpgrp());
 
@@ -385,8 +390,15 @@ void execArgs(tline* linea) {
             tcsetpgrp(STDIN_FILENO, getpgrp());
             printf("\n");
         } else {
-            printf("[%d] %d\t%s &\n", id, pid, cmd.filename);
-            add_job(pid, id, cmd.filename);
+            // añade todos los argumentos
+            char job_cmd[1024] = "";
+            for (int i = 0; i < cmd.argc; i++) {
+                strcat(job_cmd, cmd.argv[i]);
+                if (i < cmd.argc - 1) strcat(job_cmd, " ");
+            }
+
+            printf("[%d] %d\t%s &\n", id, pid, job_cmd);
+            add_job(pid, id, job_cmd);
         }
     } else {
         perror("fork");
