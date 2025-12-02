@@ -12,7 +12,8 @@
 #include <errno.h> // Necesario para gestionar interrupciones de señal
 #include <readline/readline.h>
 #include <readline/history.h>
-
+#include <readline/readline.h>
+#include <readline/history.h>
 
 #ifdef __APPLE__
 #include <libc.h>
@@ -63,12 +64,17 @@ void clear() {
     printf("\033[H\033[J");
 }
 
-// FIX: Ctrl+C (Usamos un manejador simple, la magia está en sigaction)
+// --- HANDLER Ctrl+C ---
 void manejador_sigint(int sig) {
+    (void)sig; // evitamos warning de variable no usada
+
+    // Imprimir salto de línea antes del prompt
+    write(STDOUT_FILENO, "\n", 1);
+
+    // Limpiar la línea actual
     rl_replace_line("", 0);
-    printf("\n");
-    rl_on_new_line();
-    rl_redisplay();
+    rl_on_new_line();   // Informar a readline que la línea terminó
+    rl_redisplay();     // Reimprime prompt inmediatamente
 }
 
 // --- GESTIÓN DE JOBS ---
@@ -133,16 +139,17 @@ void check_finished_jobs() {
 void init_shell() {
     clear();
 
-    // FIX Ctrl+C: Usamos sigaction para evitar SA_RESTART.
-    // Esto permite que readline se interrumpa y el prompt vuelva inmediatamente
-    // sin tener que pulsar Enter.
+    // readline no maneja señales por sí mismo
+    rl_catch_signals = 0;
+
+    // FIX Ctrl+C: usamos sigaction para manejar SIGINT
     struct sigaction sa;
     sa.sa_handler = manejador_sigint;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0; // Importante: NO poner SA_RESTART
+    sa.sa_flags = 0; // NO SA_RESTART
     sigaction(SIGINT, &sa, NULL);
 
-    // Ignorar resto de señales conflictivas
+    // Ignorar otras señales conflictivas
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
@@ -154,34 +161,36 @@ void init_shell() {
     clear();
 }
 
-void printDir(){
+/*void printDir(){
     char cwd[1024];
     if (getcwd(cwd, sizeof(cwd)) != NULL)
         printf("\nDir: %s", cwd);
     else
         perror("getcwd");
-}
+}*/
 
+// --- INPUT ---
 tline* input() {
-    // Si readline es interrumpido por Ctrl+C, devuelve NULL pero errno es EINTR
-    char *str = readline(">>> ");
+    char *str = readline("msh> ");
 
     if (!str) {
-        // Diferenciar Ctrl+D (EOF) de una interrupción
-        if (errno == EINTR) {
-             // Fue Ctrl+C, limpiamos errno y devolvemos línea vacía para regenerar prompt
+        if (errno == EINTR) { // Ctrl+C
             errno = 0;
-            return NULL;
+            return NULL;      // vuelve al bucle principal y se reimprime prompt
         }
 
+        // Ctrl+D
         printf("\nSaliendo...\n");
-        for(int i=0; i<jobs_count; i++) free(jobs_array[i].comando);
+        for(int i = 0; i < jobs_count; i++) free(jobs_array[i].comando);
         free(jobs_array);
         exit(0);
     }
 
     if (strlen(str) > 0) add_history(str);
-    return tokenize(str);
+
+    tline *linea = tokenize(str); // tu función tokenizer
+    free(str);
+    return linea;
 }
 
 // --- COMANDOS INTERNOS ---
@@ -190,20 +199,28 @@ int manejador_cd(tline* linea) {
     tcommand cmd = linea->commands[0];
     char* dir;
 
-    if (cmd.argc > 1) {
-        dir = cmd.argv[1];
-    } else {
-        dir = getenv("HOME");
-        if (!dir) {
-            fprintf(stderr, "cd: variable HOME no definida\n");
-            return 1;
-        }
+    if (cmd.argc > 1) dir = cmd.argv[1];
+    else dir = getenv("HOME");
+
+    if (!dir) {
+        fprintf(stderr, "cd: variable HOME no definida\n");
+        return 1;
     }
 
     if (chdir(dir) != 0) {
         perror("cd");
         return 1;
     }
+
+    // Obtener directorio absoluto actual
+    char cwd[1024];
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        printf("Directorio cambiado a: %s\n\n", cwd);
+    } else {
+        perror("getcwd");
+        printf("Directorio cambiado.\n\n");
+    }
+
     return 0;
 }
 
@@ -330,6 +347,7 @@ void execArgs(tline* linea) {
             tcsetpgrp(STDIN_FILENO, pid);
             waitpid(pid, NULL, 0);
             tcsetpgrp(STDIN_FILENO, getpgrp());
+            printf("\n");
         } else {
             printf("[%d] %d\t%s &\n", id, pid, cmd.filename);
             add_job(pid, id, cmd.filename);
@@ -380,6 +398,7 @@ void execArgsPiped(tline* linea) {
         tcsetpgrp(STDIN_FILENO, group_pid);
         for (int i = 0; i < n; i++) waitpid(pids[i], NULL, 0);
         tcsetpgrp(STDIN_FILENO, getpgrp());
+        printf("\n");
     } else {
         char job_cmd[1024] = "";
         for (int i = 0; i < n; i++) {
@@ -392,29 +411,29 @@ void execArgsPiped(tline* linea) {
 }
 
 int main() {
+    // Inicialización shell
     init_shell();
+
     tline* entrada;
 
     while (1) {
-        check_finished_jobs();
-        printDir();
+        // check_finished_jobs();  // opcional
+        // printDir();             // comentado
 
         entrada = input();
-        if (!entrada) continue; // Si fue Ctrl+C o línea vacía
+        if (!entrada) continue; // línea vacía o Ctrl+C
 
-        // 1. Intentar comando interno
-        if (ownCmdHandler(entrada)) {
-            // Ya se ejecutó internamente, no hacer nada más
-        }
-        // 2. Comando externo
+        // Ejecutar comandos internos o externos
+        if (ownCmdHandler(entrada)) { }
         else if (entrada->ncommands == 1) {
             execArgs(entrada);
+            printf("\n"); // salto de línea entre comandos
         }
         else if (entrada->ncommands >= 2) {
             execArgsPiped(entrada);
+            printf("\n"); // salto de línea entre comandos
         }
-
-        // No hacemos free(entrada) manualmente
     }
+
     return 0;
 }
