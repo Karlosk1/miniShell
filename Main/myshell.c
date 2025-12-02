@@ -1,28 +1,23 @@
 #include <stdio.h>
 #include <signal.h>
-#include <readline/readline.h>
 #include <unistd.h>
-#include <readline/history.h>
-#include <stdlib.h>
-#include <sys/wait.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <string.h>
 #include <errno.h> // Necesario para gestionar interrupciones de señal
 #include <readline/readline.h>
 #include <readline/history.h>
-#include <readline/readline.h>
-#include <readline/history.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include "parser.h"
+#include "myshell.h"
 
 #ifdef __APPLE__
 #include <libc.h>
 #endif
 
-#include "parser.h"
-#include "myshell.h"
 
-// --- ESTRUCTURA DE JOBS ---
+//Declaramos TAD jobs como array dinamico
+
 typedef struct {
     int id;
     pid_t pgid;
@@ -34,12 +29,15 @@ int jobs_count = 0;
 int jobs_capacity = 0;
 int siguienteId = 1;
 
-// --- TIPOS ---
-typedef int (*command_func_tline)(tline* linea);
+//Creamos un diccionario para manejar los comandos internos
+
+typedef int (*funcion_tLine)(tline* linea);
+
+//Par nombre-funcion
 
 typedef struct {
-    char *name;
-    command_func_tline func;
+    char *nombre;
+    funcion_tLine funcion;
 } command_entry;
 
 // Declaraciones
@@ -58,18 +56,18 @@ command_entry diccionariodeComandos[] = {
     {NULL, NULL}
 };
 
-// --- UTILIDADES ---
+// Limpiar la entrada
 
-void clear() {
-    printf("\033[H\033[J");
+void limpiarEntrada() {
+    printf("\033[H\033[J"); //033 es ESC en octal, codigo de escape en terminal [H lo pone la izquierda del todo el cursor. [J limpia desde el cursor hasta el final de la pantalla. como estamos a la izquierda del todo borra toda la pantalla
 }
 
-// --- HANDLER Ctrl+C ---
-void manejador_sigint(int sig) {
-    (void)sig; // evitamos warning de variable no usada
+// Manejador Ctrl+C
+
+void manejador_CrtlC() {
 
     // Imprimir salto de línea antes del prompt
-    write(STDOUT_FILENO, "\n", 1);
+    write(STDOUT_FILENO, "\n", 1); //Escribe en el descriptpr de archivo standar de salida un \n de 1 byte
 
     // Limpiar la línea actual
     rl_replace_line("", 0);
@@ -77,7 +75,7 @@ void manejador_sigint(int sig) {
     rl_redisplay();     // Reimprime prompt inmediatamente
 }
 
-// --- GESTIÓN DE JOBS ---
+// Funciones relacionadas con la gestion de jobs
 
 void add_job(pid_t pgid, int id, const char *cmd) {
     if (jobs_count >= jobs_capacity) {
@@ -93,7 +91,9 @@ void add_job(pid_t pgid, int id, const char *cmd) {
     jobs_count++;
 }
 
-void remove_job_by_index(int index) {
+//Libera el indice y desde el indice hasta el final retrae todo el array una posicion
+
+void removeJobxIndex(int index) {
     if (index >= 0 && index < jobs_count) {
         free(jobs_array[index].comando);
         for (int i = index; i < jobs_count - 1; i++) {
@@ -103,32 +103,44 @@ void remove_job_by_index(int index) {
     }
 }
 
-void remove_job(pid_t pgid) {
+//Dado un pgid recorre el array buscando el pdgid y cuando lo encuentra borra el job
+
+void removeJobxPgid(pid_t pgid) {
     for (int i = 0; i < jobs_count; i++) {
         if (jobs_array[i].pgid == pgid) {
-            remove_job_by_index(i);
+            removeJobxIndex(i);
             return;
         }
     }
 }
 
-tJob* getJobXid(int id) {
+tJob* getJobxId(int id) {
+
     for (int i = 0; i < jobs_count; i++) {
-        if (jobs_array[i].id == id) return &jobs_array[i];
+        if (jobs_array[i].id == id) {
+            return &jobs_array[i]; //Devuelve la direccion de memoria. Es un puntero a tJob no una copia, para modificar el array
+        }
     }
     return NULL;
 }
 
-int getNextId() { return siguienteId++; }
+int getSiguienteId() {
+    return siguienteId++;
+}
 
-void check_finished_jobs() {
+void comprobarJobsTerminados() {
+
     for (int i = 0; i < jobs_count; i++) {
+
+        //Status recibe su valor despues de waitpid
+
         int status;
+
         pid_t result = waitpid(-jobs_array[i].pgid, &status, WNOHANG);
 
         if (result > 0) {
             printf("[%d]+  Done\t\t%s\n", jobs_array[i].id, jobs_array[i].comando);
-            remove_job_by_index(i);
+            removeJobxIndex(i);
             i--; // Imprescindible tras eliminar un elemento del array
         }
     }
@@ -137,14 +149,14 @@ void check_finished_jobs() {
 // --- SHELL CORE ---
 
 void init_shell() {
-    clear();
+    limpiarEntrada();
 
     // readline no maneja señales por sí mismo
     rl_catch_signals = 0;
 
     // FIX Ctrl+C: usamos sigaction para manejar SIGINT
     struct sigaction sa;
-    sa.sa_handler = manejador_sigint;
+    sa.sa_handler = manejador_CrtlC;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0; // NO SA_RESTART
     sigaction(SIGINT, &sa, NULL);
@@ -158,7 +170,7 @@ void init_shell() {
     char* username = getenv("USER");
     printf("\n\n\nUSER is: @%s\n", username);
     sleep(1);
-    clear();
+    limpiarEntrada();
 }
 
 /*void printDir(){
@@ -275,7 +287,7 @@ int manejador_fg(tline* linea) {
 
     if (id == -1) { printf("fg: no hay trabajos\n"); return 1; }
 
-    tJob *job = getJobXid(id);
+    tJob *job = getJobxId(id);
     if (!job) { printf("fg: trabajo %d no encontrado\n", id); return 1; }
 
     printf("%s\n", job->comando);
@@ -293,7 +305,7 @@ int manejador_fg(tline* linea) {
     tcsetpgrp(STDIN_FILENO, getpgrp());
 
     if (WIFEXITED(status) || WIFSIGNALED(status)) {
-        remove_job(pgid);
+        removeJobxPgid(pgid);
     }
     return 0;
 }
@@ -309,9 +321,9 @@ int ownCmdHandler(tline* linea) {
 
     if (!cmdName) return 0;
 
-    for (int i = 0; diccionariodeComandos[i].name != NULL; i++) {
-        if (strcmp(cmdName, diccionariodeComandos[i].name) == 0) {
-            diccionariodeComandos[i].func(linea);
+    for (int i = 0; diccionariodeComandos[i].nombre != NULL; i++) {
+        if (strcmp(cmdName, diccionariodeComandos[i].nombre) == 0) {
+            diccionariodeComandos[i].funcion(linea);
             return 1; // Manejado
         }
     }
@@ -323,7 +335,7 @@ int ownCmdHandler(tline* linea) {
 void execArgs(tline* linea) {
     tcommand cmd = linea->commands[0];
     int bg = linea->background;
-    int id = getNextId();
+    int id = getSiguienteId();
     pid_t pid = fork();
 
     if (pid == 0) { // Hijo
@@ -358,7 +370,7 @@ void execArgs(tline* linea) {
 void execArgsPiped(tline* linea) {
     int n = linea->ncommands;
     int bg = linea->background;
-    int id = getNextId();
+    int id = getSiguienteId();
     pid_t group_pid = 0;
     int pipes[n - 1][2];
     pid_t pids[n];
