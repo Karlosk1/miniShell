@@ -24,8 +24,8 @@ typedef struct {
     char* comando;
 } tJob;
 
-tJob* jobs_array = NULL;
-int jobs_count = 0;
+tJob* jobs_Array = NULL;
+int contador_Jobs = 0;
 int jobs_capacity = 0;
 int siguienteId = 1;
 
@@ -78,36 +78,36 @@ void manejador_CrtlC() {
 // Funciones relacionadas con la gestion de jobs
 
 void add_job(pid_t pgid, int id, const char *cmd) {
-    if (jobs_count >= jobs_capacity) {
+    if (contador_Jobs >= jobs_capacity) {
         int new_capacity = (jobs_capacity == 0) ? 4 : jobs_capacity * 2;
-        tJob* temp = realloc(jobs_array, new_capacity * sizeof(tJob));
+        tJob* temp = realloc(jobs_Array, new_capacity * sizeof(tJob));
         if (!temp) { perror("realloc"); return; }
-        jobs_array = temp;
+        jobs_Array = temp;
         jobs_capacity = new_capacity;
     }
-    jobs_array[jobs_count].pgid = pgid;
-    jobs_array[jobs_count].id = id;
-    jobs_array[jobs_count].comando = strdup(cmd);
-    jobs_count++;
+    jobs_Array[contador_Jobs].pgid = pgid;
+    jobs_Array[contador_Jobs].id = id;
+    jobs_Array[contador_Jobs].comando = strdup(cmd);
+    contador_Jobs++;
 }
 
 //Libera el indice y desde el indice hasta el final retrae todo el array una posicion
 
 void removeJobxIndex(int index) {
-    if (index >= 0 && index < jobs_count) {
-        free(jobs_array[index].comando);
-        for (int i = index; i < jobs_count - 1; i++) {
-            jobs_array[i] = jobs_array[i + 1];
+    if (index >= 0 && index < contador_Jobs) {
+        free(jobs_Array[index].comando);
+        for (int i = index; i < contador_Jobs - 1; i++) {
+            jobs_Array[i] = jobs_Array[i + 1];
         }
-        jobs_count--;
+        contador_Jobs--;
     }
 }
 
 //Dado un pgid recorre el array buscando el pdgid y cuando lo encuentra borra el job
 
 void removeJobxPgid(pid_t pgid) {
-    for (int i = 0; i < jobs_count; i++) {
-        if (jobs_array[i].pgid == pgid) {
+    for (int i = 0; i < contador_Jobs; i++) {
+        if (jobs_Array[i].pgid == pgid) {
             removeJobxIndex(i);
             return;
         }
@@ -116,9 +116,9 @@ void removeJobxPgid(pid_t pgid) {
 
 tJob* getJobxId(int id) {
 
-    for (int i = 0; i < jobs_count; i++) {
-        if (jobs_array[i].id == id) {
-            return &jobs_array[i]; //Devuelve la direccion de memoria. Es un puntero a tJob no una copia, para modificar el array
+    for (int i = 0; i < contador_Jobs; i++) {
+        if (jobs_Array[i].id == id) {
+            return &jobs_Array[i]; //Devuelve la direccion de memoria. Es un puntero a tJob no una copia, para modificar el array
         }
     }
     return NULL;
@@ -130,25 +130,25 @@ int getSiguienteId() {
 
 void comprobarJobsTerminados() {
 
-    for (int i = 0; i < jobs_count; i++) {
+    for (int i = 0; i < contador_Jobs; i++) {
 
         //Status recibe su valor despues de waitpid
 
-        int status;
+        int estatus;
 
-        pid_t result = waitpid(-jobs_array[i].pgid, &status, WNOHANG);
+        pid_t resultado = waitpid(-jobs_Array[i].pgid, &estatus, WNOHANG);
 
-        if (result > 0) {
-            printf("[%d]+  Done\t\t%s\n", jobs_array[i].id, jobs_array[i].comando);
+        if (resultado > 0) {
+            printf("[%d]+  Done\t\t%s\n", jobs_Array[i].id, jobs_Array[i].comando);
             removeJobxIndex(i);
-            i--; // Imprescindible tras eliminar un elemento del array
+            i--; //Se resta 1 posicion por cada job eliminado
         }
     }
 }
 
-// --- SHELL CORE ---
+// Gestion de la interfaz de shell
 
-void init_shell() {
+void iniciar_Shell() {
     limpiarEntrada();
 
     // readline no maneja señales por sí mismo
@@ -173,39 +173,32 @@ void init_shell() {
     limpiarEntrada();
 }
 
-/*void printDir(){
-    char cwd[1024];
-    if (getcwd(cwd, sizeof(cwd)) != NULL)
-        printf("\nDir: %s", cwd);
-    else
-        perror("getcwd");
-}*/
+// Gestion de la entrada
 
-// --- INPUT ---
-tline* input() {
+tline* entrada() {
     char *str = readline("msh> ");
 
-    if (!str) {
+    if (str == NULL) {
         if (errno == EINTR) { // Ctrl+C
             errno = 0;
-            return NULL;      // vuelve al bucle principal y se reimprime prompt
+            return NULL;      // vuelve al bucle principal y se reimprime
         }
 
         // Ctrl+D
         printf("\nSaliendo...\n");
-        for(int i = 0; i < jobs_count; i++) free(jobs_array[i].comando);
-        free(jobs_array);
+        for(int i = 0; i < contador_Jobs; i++) free(jobs_Array[i].comando);
+        free(jobs_Array);
         exit(0);
     }
 
     if (strlen(str) > 0) add_history(str);
 
-    tline *linea = tokenize(str); // tu función tokenizer
+    tline *linea = tokenize(str);
     free(str);
     return linea;
 }
 
-// --- COMANDOS INTERNOS ---
+// Manejadores de comandos internos
 
 int manejador_cd(tline* linea) {
     tcommand cmd = linea->commands[0];
@@ -214,7 +207,7 @@ int manejador_cd(tline* linea) {
     if (cmd.argc > 1) dir = cmd.argv[1];
     else dir = getenv("HOME");
 
-    if (!dir) {
+    if (dir == NULL) {
         fprintf(stderr, "cd: variable HOME no definida\n");
         return 1;
     }
@@ -238,21 +231,27 @@ int manejador_cd(tline* linea) {
 
 int manejador_exit(tline* linea) {
     printf("Saliendo de la miniShell...\n");
-    for(int i=0; i<jobs_count; i++) free(jobs_array[i].comando);
-    free(jobs_array);
+    for(int i=0; i<contador_Jobs; i++) free(jobs_Array[i].comando);
+
+    //Libera el array de jobs cuando sale
+    free(jobs_Array);
     exit(0);
 }
 
 int manejador_umask(tline* linea) {
     tcommand cmd = linea->commands[0];
-    mode_t old_mask = umask(0);
-    umask(old_mask);
+    mode_t mascara_vieja = umask(0);
+    umask(mascara_vieja);
 
     if (cmd.argc == 1) {
-        printf("%03o\n", old_mask);
+        printf("%03o\n", mascara_vieja);
     }
     else if (cmd.argc == 2) {
+
+        //Puntero al final del numero
         char *endptr;
+
+        //strtol devuelve long
         long val = strtol(cmd.argv[1], &endptr, 8);
 
         if (*endptr != '\0' || val < 0 || val > 0777) {
@@ -260,17 +259,19 @@ int manejador_umask(tline* linea) {
             return 1;
         }
 
-        mode_t new_mask = (mode_t)val;
-        umask(new_mask);
-        printf("%03o\n", new_mask);
+        mode_t mascara_nueva = (mode_t)val;
+        umask(mascara_nueva);
+        printf("%03o\n", mascara_nueva);
     }
     return 0;
 }
 
 
 int manejador_jobs(tline* linea) {
-    for (int i = 0; i < jobs_count; i++)
-        printf("[%d]+ Running\t%s\n", jobs_array[i].id, jobs_array[i].comando);
+
+    //Recorre el array de jobs e imprime el id y el comando de cada job que esta corriendo
+    for (int i = 0; i < contador_Jobs; i++)
+        printf("[%d]+ Running\t%s\n", jobs_Array[i].id, jobs_Array[i].comando);
     return 0;
 }
 
@@ -278,11 +279,13 @@ int manejador_fg(tline* linea) {
     tcommand cmd = linea->commands[0];
     int id = -1;
 
-    // Obtener ID (argumento o el último)
+    // Obtener ID
+
+    //Si hay mas de un job corriendo en bg
     if (cmd.argc > 1) {
         id = atoi(cmd.argv[1]);
     } else {
-        if (jobs_count > 0) id = jobs_array[jobs_count - 1].id;
+        if (contador_Jobs > 0) id = jobs_Array[contador_Jobs - 1].id;
     }
 
     if (id == -1) { printf("fg: no hay trabajos\n"); return 1; }
@@ -299,30 +302,33 @@ int manejador_fg(tline* linea) {
     // Continuar si estaba parado
     kill(-pgid, SIGCONT);
 
-    int status;
-    waitpid(-pgid, &status, WUNTRACED);
+    int estatus;
+    waitpid(-pgid, &estatus, WUNTRACED);
 
     tcsetpgrp(STDIN_FILENO, getpgrp());
 
-    if (WIFEXITED(status) || WIFSIGNALED(status)) {
+    if (WIFEXITED(estatus) || WIFSIGNALED(estatus)) {
         removeJobxPgid(pgid);
     }
     return 0;
 }
 
-// FIX: Función más robusta para detectar comandos internos
-int ownCmdHandler(tline* linea) {
-    // Si hay pipes, NO ejecutamos comandos internos (salvo requerimiento específico)
+// Manejador de las ejecuciones de funciones internas
+
+int manejador_internas(tline* linea) {
+    // Si hay pipes, no se ejecuta funciones internas
     if (linea->ncommands != 1) return 0;
 
-    // Verificamos tanto filename como argv[0] por seguridad
-    char* cmdName = linea->commands[0].argv[0]; // Siempre argv[0]
-    if (!cmdName) return 0;
+    // Verificamos filename y argv[0]
+    char* nombre_Comando = linea->commands[0].argv[0]; // Siempre argv[0]
+    if (!nombre_Comando) {
+        return 0;
+    }
 
-    if (!cmdName) return 0;
+    if (!nombre_Comando) return 0;
 
     for (int i = 0; diccionariodeComandos[i].nombre != NULL; i++) {
-        if (strcmp(cmdName, diccionariodeComandos[i].nombre) == 0) {
+        if (strcmp(nombre_Comando, diccionariodeComandos[i].nombre) == 0) {
             diccionariodeComandos[i].funcion(linea);
             return 1; // Manejado
         }
@@ -424,7 +430,7 @@ void execArgsPiped(tline* linea) {
 
 int main() {
     // Inicialización shell
-    init_shell();
+    iniciar_Shell();
 
     tline* entrada;
 
@@ -432,11 +438,11 @@ int main() {
         // check_finished_jobs();  // opcional
         // printDir();             // comentado
 
-        entrada = input();
+        entrada = entrada();
         if (!entrada) continue; // línea vacía o Ctrl+C
 
         // Ejecutar comandos internos o externos
-        if (ownCmdHandler(entrada)) { }
+        if (manejador_internas(entrada)) { }
         else if (entrada->ncommands == 1) {
             execArgs(entrada);
             printf("\n"); // salto de línea entre comandos
